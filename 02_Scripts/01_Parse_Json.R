@@ -7,7 +7,18 @@
 library(jsonlite)
 library(dplyr)
 library(stringr)
-library(tibble)
+library(tidyverse)
+library(purrr)
+
+`%+%` <- function(e1, e2) {
+  if (is.character(e1) && is.character(e2)) {
+    paste0(e1, e2)
+  } else {
+    base::`+`(e1, e2)
+  }
+}
+
+
 
 # files
 files <- list.files("01_Data", pattern = "\\.json$", full.names = TRUE)
@@ -20,130 +31,46 @@ extract_params <- function(fname) {
   list(participant = participant, key = key)
 }
 
-# try to locate 'whatsapp_links_with_context' in parsed JSON
-find_links <- function(j) {
-  if (is.null(j)) return(NULL)
-  
-  # direct field
-  if (is.list(j) && !is.null(j$whatsapp_links_with_context)) {
-    return(j$whatsapp_links_with_context)
+
+
+parse_json_clean <- function(file) {
+  j <- tryCatch(fromJSON(file, simplifyVector = FALSE), error = function(e) return(e))
+  if (inherits(j, "error")) {
+    cat("WARNING! ERROR WHILE PARSING JSON FILE:")
+    cat(file)
+    return(j)
   }
-  
-  # data.frame with column
-  if (is.data.frame(j) && "whatsapp_links_with_context" %in% names(j)) {
-    return(j$whatsapp_links_with_context[[1]])
-  }
-  
-  # list of elements that may contain the field
-  if (is.list(j)) {
-    matches <- lapply(j, function(x) {
-      if (is.list(x) && !is.null(x$whatsapp_links_with_context)) {
-        return(x$whatsapp_links_with_context)
-      }
-      NULL
-    })
-    matches <- matches[!sapply(matches, is.null)]
-    if (length(matches) > 0) return(matches[[1]])
-  }
-  
-  # fallback: check first element safely
-  if (is.list(j) && length(j) >= 1) {
-    el1 <- j[[1]]
-    if (is.list(el1) && !is.null(el1$whatsapp_links_with_context)) {
-      return(el1$whatsapp_links_with_context)
+  name_vec <- c()
+  message("Iterating over ", length(seq_along(j)), " elements in file ", basename(file))
+  for (i in seq_along(j)) {
+    
+    element <- j[[i]]
+    element_name <- names(j[[i]])
+    name_vec <- c(name_vec, element_name)
+    
+   
+    if (is.list(element) && length(element) == 1) {
+      # message("Iterating over element: ", names(element),
+      #         " that has class ", class(element))
+      
+      inner <- element[[1]]
+
+      j[[i]] <- inner
+      
     }
   }
+  names(j) <- name_vec
   
-  return(NULL)
+  return(j)
+
 }
 
+ 
 
-results <- list()
 
-for (f in files) {
+ for (f in files) {
   params <- extract_params(f)
-  # safe parse
-  parsed <- tryCatch(fromJSON(f, simplifyVector = FALSE), error = function(e) e)
-  
-  if (inherits(parsed, "error")) {
-    results[[length(results) + 1]] <- tibble(
-      link = NA_character_,
-      domain = NA_character_,
-      participant = params$participant,
-      key = params$key,
-      file = basename(f),
-      status = "invalid_json",
-      error_msg = parsed$message
-    )
-    next
-  }
-  
-  links <- find_links(parsed)
-  
-  if (is.null(links) || length(links) == 0) {
-    results[[length(results) + 1]] <- tibble(
-      link = NA_character_,
-      domain = NA_character_,
-      participant = params$participant,
-      key = params$key,
-      file = basename(f),
-      status = "no_links_found",
-      error_msg = NA_character_
-    )
-    next
-  }
-  
-  # coerce links -> dataframe
-  df_links <- NULL
-  if (is.data.frame(links)) {
-    df_links <- as_tibble(links)
-  } else if (is.list(links)) {
-    df_links <- tryCatch(bind_rows(links), error = function(e) NULL)
-    if (is.null(df_links)) {
-      df_links <- tryCatch(as_tibble(links), error = function(e) NULL)
-    }
-  } else {
-    df_links <- tibble(link = as.character(links))
-  }
-  
-  if (is.null(df_links) || nrow(df_links) == 0) {
-    results[[length(results) + 1]] <- tibble(
-      link = NA_character_,
-      domain = NA_character_,
-      participant = params$participant,
-      key = params$key,
-      file = basename(f),
-      status = "bad_structure",
-      error_msg = "could not convert links to dataframe"
-    )
-    next
-  }
-  
-  # normalize columns
-  if (!"link" %in% names(df_links)) df_links$link <- NA_character_
-  if (!"domain" %in% names(df_links)) df_links$domain <- NA_character_
-  
-  df_links <- df_links %>%
-    mutate(
-      link = as.character(link),
-      domain = as.character(domain),
-      participant = params$participant,
-      key = params$key,
-      file = basename(f),
-      status = "ok",
-      error_msg = NA_character_
-    )
-  
-  results[[length(results) + 1]] <- df_links
+  parsed <- parse_json_clean(f)
+  #print(parsed)
 }
 
-# combine and save
-df_all <- bind_rows(results)
-
-save(df_all, file = "01_Data/all_whatsapp_links.RData")
-# optional quick inspect
-write.csv(df_all, "01_Data/all_whatsapp_links.csv", row.names = FALSE)
-
-# brief summary
-cat("files:", length(files), " | ok:", sum(df_all$status == "ok", na.rm = TRUE),
-    " | invalid/missing:", sum(df_all$status != "ok", na.rm = TRUE), "\n")
