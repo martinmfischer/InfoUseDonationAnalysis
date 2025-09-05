@@ -1,57 +1,80 @@
 # ------------------------------
-# WhatsApp Links Extraction Script
+# Analysis Script
 # ------------------------------
 
-# 1. Load the previously saved RDS file
-data_path <- "01_Data/parsed_data.rds"   # <-- adjust the path
-whatsapp_data <- readRDS(data_path)
+pacman::p_load(
+  "tidyverse",
+  "purrr",
+  "dplyr"
+)
 
-# 2. Initialize empty list to store results
-all_links <- list()
-############# ALL IS BROKEN
-# 3. Loop over each participant
-for (participant in whatsapp_data) {
+print_attributes <- function(x) {
+  atts <- attributes(x)
+  msg <- paste(names(atts), "=", sapply(atts, toString), collapse = "; ")
+  message("Attributes -> ", msg)
+}
+
+# 1. Load the previously saved RDS file
+data_path <- "01_Data/parsed_data.rds"   
+data <- readRDS(data_path)
+
+# 2. Initialize empty tibble to store all links
+all_links <- tibble(participant = character(),
+                    domain = character(),
+                    link = character())
+
+# 3. Loop over each participant, Whatsapp analysis
+for (participant in data) {
+  
+  if (is.null(attr(participant, "has_whatsapp")) || attr(participant, "has_whatsapp") == FALSE) next
   
   # Extract participant ID
-  participant_id <- attr(participant$whatsapp[[1]], "participant")
+  participant_id <- attr(participant, "participant")
   
-  # Loop over top chats (if multiple)
-  for (chat_name in names(participant$whatsapp[[1]])) {
-    if (grepl("whatsapp_links_with_context", chat_name)) next # skip list names that are not links
+  chat_list <- participant$whatsapp
+  
+  message("participant_id is ", participant_id)
+  print_attributes(participant)
+  
+  # Loop over top chats
+  for (chat_name in names(chat_list[[1]])) {
+    if (!grepl("whatsapp_links_with_context", chat_name)) next
     
-    chat <- participant$whatsapp[[1]][[chat_name]]
+    chat <- chat_list[[1]][[chat_name]]
+    message("Number of links in chat ", chat_name, " is ", length(chat))
     
-    if (!is.null(chat$whatsapp_links_with_context)) {
-      for (link_item in chat$whatsapp_links_with_context) {
-        all_links[[length(all_links) + 1]] <- data.frame(
-          participant = participant_id,
-          link = link_item$link,
-          domain = link_item$domain,
-          stringsAsFactors = FALSE
-        )
-      }
-    }
+    # Extract domains and links
+    chat_df <- tibble(
+      participant = participant_id,
+      domain = sapply(chat, function(x) x$domain),
+      link = sapply(chat, function(x) x$link)
+    )
+    
+    # Append to master table
+    all_links <- bind_rows(all_links, chat_df)
   }
 }
 
-# 4. Combine all into one dataframe
-links_df <- do.call(rbind, all_links)
+# 4. Aggregate across all participants
+domain_summary <- all_links %>%
+  group_by(domain) %>%
+  summarise(
+    total_links = n(),                           # total number of links
+    participants_with_link = n_distinct(participant)  # number of distinct participants
+  ) %>%
+  arrange(desc(total_links))
 
-# 5. Count occurrences per domain per participant
-library(dplyr)
-domain_counts <- links_df %>%
+# 5. Optional: Count per participant per domain
+domain_counts <- all_links %>%
   group_by(participant, domain) %>%
   summarise(count = n(), .groups = "drop") %>%
   arrange(participant, desc(count))
 
 # 6. Save results
-saveRDS(links_df, "whatsapp_links_combined.rds")
+saveRDS(all_links, "whatsapp_links_combined.rds")
 saveRDS(domain_counts, "whatsapp_domain_counts.rds")
 write.csv(domain_counts, "whatsapp_domain_counts.csv", row.names = FALSE)
+write.csv(domain_summary, "whatsapp_domain_summary.csv", row.names = FALSE)
 
 # 7. Optional: view top domains overall
-top_domains <- domain_counts %>%
-  group_by(domain) %>%
-  summarise(total_count = sum(count)) %>%
-  arrange(desc(total_count))
-print(head(top_domains, 20))
+print(head(domain_summary, 20))

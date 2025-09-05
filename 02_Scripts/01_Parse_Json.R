@@ -1,7 +1,7 @@
 # ------------------------------------------------------------
 # Script: parse_all_json_robust.R
 # Task  : Robustly load all JSONs in 01_Data, extract params,
-#         flag malformed/empty files, save combined df
+#         flag malformed/empty files, save combined data as nested list rds file
 # ------------------------------------------------------------
 
 pacman::p_load(
@@ -112,34 +112,60 @@ for (f in files) {
   platform <- attr(parsed, "platform")
   key <- attr(parsed, "key")
   
-  participant_set <- unique(c(participant_set, pid))
+  
   
   if (is.null(master_list[[pid]])) master_list[[pid]] <- list()
   
+  for (platform_flag in c("has_whatsapp", "has_facebook")) {
+    if (is.null(attr(master_list[[pid]], platform_flag))) {
+      attr(master_list[[pid]], platform_flag) <- FALSE
+    }
+  }
+
+  
   if (is.na(platform)) next
+  
+  #attributes(parsed) <- NULL #reset lower level attributes to remove double structures
+  for(attribute in c("key", "participant", "source", "platform")) {
+    attr(parsed, attribute) <- NULL
+    
+  }
+  
   if (platform == "facebook") {
+    
+    
     master_list[[pid]]$facebook <- parsed
     facebook_count <- facebook_count + 1
+    attr(master_list[[pid]], "participant") <- pid
+    attr(master_list[[pid]], "has_facebook") <- TRUE
   } 
   else if (platform == "whatsapp") {
     if (is.null(master_list[[pid]]$whatsapp)) master_list[[pid]]$whatsapp <- list()
     chat_name <- ifelse(nzchar(key), key, paste0("chat_", length(master_list[[pid]]$whatsapp)+1))
     master_list[[pid]]$whatsapp[[chat_name]] <- parsed
     whatsapp_count <- whatsapp_count + 1
+    attr(master_list[[pid]], "has_whatsapp") <- TRUE
+    
   } else {
     
     missing_count <- missing_count + 1
     
   }
+  attr(master_list[[pid]], "participant") <- pid
+  message("entry has the following platform attribute: ", attr(master_list[[pid]], "platform"))
 }
 
 # ---------------- Save ----------------
 saveRDS(master_list, file = "01_Data/parsed_data.rds")
 
 # ---------------- Summary ----------------
+
+
+
+
 message("\n✅ Parsing finished!")
 message("Files processed: ", file_count)
-message("Unique participants: ", length(participant_set))
+message("Unique participants: ", length(master_list))
 message("Facebook exports loaded: ", facebook_count)
 message("WhatsApp exports loaded: ", whatsapp_count)
 message("Files with no usable data: ", missing_count)
