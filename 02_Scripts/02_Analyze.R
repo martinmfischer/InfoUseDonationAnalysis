@@ -2,17 +2,130 @@
 # Analysis Script
 # ------------------------------
 
+
+#### Clean Env
+rm(list = ls())
+gc()
+
+#### Load/Install Packages
+if(!require("pacman", character.only=TRUE)) install.packages("pacman")
 pacman::p_load(
   "tidyverse",
   "purrr",
-  "dplyr"
+  "dplyr",
+  "readxl",
+  "stringr",
+  "fuzzyjoin",
+  "urltools"
 )
+
+
+
+
+
+#### Load Public Speaker Database
+
+db <- read_excel("05_Public_speaker_Database/data/DBOES_2024_12_komplett.xlsx") %>% as_tibble()
+
+
 
 print_attributes <- function(x) {
   atts <- attributes(x)
   msg <- paste(names(atts), "=", sapply(atts, toString), collapse = "; ")
   message("Attributes -> ", msg)
 }
+
+
+is_social_domain <- function(domain_to_seek) {
+  platforms <- c("tiktok.com", "facebook.com", "instagram.com", "x.com")
+  any(str_detect(domain_to_seek, platforms))
+}
+
+
+link_in_database <- function(link, max_dist = 5) {
+  
+  ## test env
+  
+  #link = "www.aachexcvbcxvbnerzeitung.de/zeitungslink"
+  #max_dist = 3
+  
+  
+
+  
+  
+  # --- Extract path from the link
+  path_to_seek <- link %>%
+    url_parse() %>%
+    .$path %>%
+    str_to_lower()
+  
+  domain_to_seek <- link %>%
+    url_parse() %>%
+    .$domain %>%
+    str_to_lower()
+  
+
+  
+  
+  
+  # --- Prepare DB in long format (all social URLs in one column)
+  db_long <- db %>%
+    select(KomplettID, Name, contains("URL")) %>%
+    tidyr::pivot_longer(cols = contains("URL"),
+                        names_to = "platform",
+                        values_to = "url") %>%
+    filter(!is.na(url), url != "existiert nicht") %>%
+    mutate(domain = url_parse(url)$domain %>% str_to_lower()) %>%
+    mutate(domain_suffix = suffix_extract(domain)$domain,
+           path = url_parse(url)$path)
+  
+  
+  
+  if(is_social_domain(domain_to_seek)) {
+    message("we got a social domain!")
+    
+    if(is.na(path_to_seek)) return(NULL)
+
+    
+  } else {
+    message("we got a web domain!")
+    
+    suf_ex <- domain_to_seek %>% suffix_extract()
+    path_to_seek <- suf_ex$domain ## the name of our publication is now in the domain, not the path. Overriding this.
+    
+    
+  }
+  
+  # --- 1. Exact path match
+  exact_match <- db_long %>%
+    filter(path == path_to_seek)
+  
+  if (nrow(exact_match) > 0) return(exact_match)
+  
+  
+  # --- 2. Fuzzy match between path and Name (for newspaper websites)
+  fuzzy <- stringdist_left_join(
+    tibble(path = path_to_seek),
+    db %>% select(KomplettID, Name) %>% mutate(Name = str_to_lower(Name)),
+    by = c("path" = "Name"),
+    max_dist = max_dist
+  )
+  
+  
+  no_match <- all(is.na(fuzzy$KomplettID))
+  
+  if (!no_match) return(fuzzy)
+  
+  return(NULL)
+  
+}
+
+filter_links <- function(links) {
+  
+  links_filtered <- links %>% filter(link_in_database(link))
+  
+}
+
 
 # 1. Load the previously saved RDS file
 data_path <- "01_Data/parsed_data.rds"   
@@ -52,8 +165,17 @@ for (participant in data) {
     
     # Append to master table
     all_links <- bind_rows(all_links, chat_df)
+    
   }
 }
+
+#### Filter to dbös!
+
+all_links <- filter_links(all_links)
+
+
+
+####
 
 # 4. Aggregate across all participants
 domain_summary <- all_links %>%
