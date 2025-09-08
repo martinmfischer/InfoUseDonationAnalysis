@@ -16,7 +16,9 @@ pacman::p_load(
   "readxl",
   "stringr",
   "fuzzyjoin",
-  "urltools"
+  "urltools",
+  "tidyr",
+  "progress"
 )
 
 
@@ -28,6 +30,25 @@ pacman::p_load(
 db <- read_excel("05_Public_speaker_Database/data/DBOES_2024_12_komplett.xlsx") %>% as_tibble()
 
 
+db_long <- db %>%
+  select(KomplettID, Name, contains("URL")) %>%
+  pivot_longer(
+    cols = contains("URL"),
+    names_to = "platform",
+    values_to = "url"
+  ) %>%
+  filter(!is.na(url), url != "existiert nicht") %>%
+  mutate(
+    domain = url_parse(url)$domain %>% str_to_lower(),
+    domain_suffix = suffix_extract(domain)$domain,
+    path = url_parse(url)$path
+  )
+
+db_names <- db %>%
+  select(KomplettID, Name) %>%
+  mutate(Name = str_to_lower(Name))
+
+
 
 print_attributes <- function(x) {
   atts <- attributes(x)
@@ -36,22 +57,19 @@ print_attributes <- function(x) {
 }
 
 
-is_social_domain <- function(domain_to_seek) {
-  platforms <- c("tiktok.com", "facebook.com", "instagram.com", "x.com")
-  any(str_detect(domain_to_seek, platforms))
+is_social_domain <- function(domains) {
+  social_patterns <- c("facebook.com", "instagram.com", "x.com", "tiktok.com")
+  # str_detect works rowwise via map_lgl
+  map_lgl(domains, ~ any(str_detect(.x, social_patterns)))
 }
 
 
+
 link_in_database <- function(link, max_dist = 5) {
-  
   ## test env
   
   #link = "www.aachexcvbcxvbnerzeitung.de/zeitungslink"
   #max_dist = 3
-  
-  
-
-  
   
   # --- Extract path from the link
   path_to_seek <- link %>%
@@ -63,10 +81,6 @@ link_in_database <- function(link, max_dist = 5) {
     url_parse() %>%
     .$domain %>%
     str_to_lower()
-  
-
-  
-  
   
   # --- Prepare DB in long format (all social URLs in one column)
   db_long <- db %>%
@@ -81,11 +95,12 @@ link_in_database <- function(link, max_dist = 5) {
   
   
   
-  if(is_social_domain(domain_to_seek)) {
+  if (is_social_domain(domain_to_seek)) {
     message("we got a social domain!")
     
-    if(is.na(path_to_seek)) return(NULL)
-
+    if (is.na(path_to_seek))
+      return(FALSE)
+    
     
   } else {
     message("we got a web domain!")
@@ -100,7 +115,8 @@ link_in_database <- function(link, max_dist = 5) {
   exact_match <- db_long %>%
     filter(path == path_to_seek)
   
-  if (nrow(exact_match) > 0) return(exact_match)
+  if (nrow(exact_match) > 0)
+    return(TRUE)
   
   
   # --- 2. Fuzzy match between path and Name (for newspaper websites)
@@ -112,18 +128,78 @@ link_in_database <- function(link, max_dist = 5) {
   )
   
   
-  no_match <- all(is.na(fuzzy$KomplettID))
+  match <- !all(is.na(fuzzy$KomplettID))
   
-  if (!no_match) return(fuzzy)
-  
-  return(NULL)
+  return(match)
   
 }
 
-filter_links <- function(links) {
+
+link_in_database_vec <- function(links, max_dist = 5) {
   
-  links_filtered <- links %>% filter(link_in_database(link))
+  parsed <- url_parse(links)
+  domains <- str_to_lower(parsed$domain)
+  paths <- str_to_lower(parsed$path)
   
+  # Social domain check (vectorized)
+  is_social <- is_social_domain(domains)
+  
+  # --- Vectorized loop with map_lgl (still preserves all logic)
+  map_lgl(seq_along(links), function(i) {
+    domain_to_seek <- domains[i]
+    path_to_seek <- paths[i]
+    
+    if (is_social[i]) {
+      # Social domain logic
+      if (is.na(path_to_seek)) return(FALSE)
+    } else {
+      # Web domain logic: override path with domain
+      suf_ex <- suffix_extract(domain_to_seek)
+      path_to_seek <- suf_ex$domain
+    }
+    
+    # 1. Exact path match in DB
+    exact_match <- db_long %>% filter(path == path_to_seek)
+    if (nrow(exact_match) > 0) return(TRUE)
+    
+    # 2. Fuzzy match for web domains (social domains skip fuzzy)
+    
+    if (is.na(path_to_seek)) return(FALSE)
+    if (!is_social[i]) {
+      fuzzy <- stringdist_left_join(
+        tibble(path = path_to_seek),
+        db_names,
+        by = c("path" = "Name"),
+        max_dist = max_dist
+      )
+      match <- !all(is.na(fuzzy$KomplettID))
+      return(match)
+    }
+    
+    # If social domain and no exact match
+    return(FALSE)
+  })
+}
+
+
+filter_links <- function(links, max_dist = 5, chunk_size = 100) {
+  
+  n <- nrow(links)
+  results <- logical(n)
+  pb <- progress_bar$new(total = n, format = "[:bar] :percent (:current/:total)")
+  
+  # Process in chunks
+  for (start_idx in seq(1, n, by = chunk_size)) {
+    idx <- start_idx:min(start_idx + chunk_size - 1, n)
+    results[idx] <- link_in_database_vec(links$link[idx], max_dist = max_dist)
+    pb$tick(length(idx))
+  }
+  
+  all_links_filtered <- links[results, ]
+  
+  n_filtered <- nrow(all_links_filtered)
+  message("We filtered ", n - n_filtered, " links. Remaining links: ", n_filtered)
+  return(all_links_filtered)
 }
 
 
