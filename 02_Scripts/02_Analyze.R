@@ -3,6 +3,8 @@
 # ------------------------------
 
 
+###Todo - retain DBÖS ID in final link list! Order by that as well!
+
 #### Clean Env
 rm(list = ls())
 gc()
@@ -30,8 +32,19 @@ pacman::p_load(
 db <- read_excel("05_Public_speaker_Database/data/DBOES_2024_12_komplett.xlsx") %>% as_tibble()
 
 
+normalize_name <- function(x) {
+  x %>%
+    stringr::str_to_lower() %>%
+    stringr::str_replace_all("[^a-z0-9 ]", " ") %>%
+    stringr::str_replace_all("\\b(tv|magazin|zeitung|nachrichten|online)\\b", "") %>%
+    stringr::str_squish()
+}
+
+db <- db %>%
+  mutate(Name_clean = normalize_name(Name))
+
 db_long <- db %>%
-  select(KomplettID, Name, contains("URL")) %>%
+  select(KomplettID, Name, Kategorie, Typ, contains("URL")) %>%
   pivot_longer(
     cols = contains("URL"),
     names_to = "platform",
@@ -44,9 +57,12 @@ db_long <- db %>%
     path = url_parse(url)$path
   )
 
+
 db_names <- db %>%
   select(KomplettID, Name) %>%
   mutate(Name = str_to_lower(Name))
+
+
 
 
 
@@ -58,84 +74,17 @@ print_attributes <- function(x) {
 
 
 is_social_domain <- function(domains) {
-  social_patterns <- c("facebook.com", "instagram.com", "x.com", "tiktok.com")
+  social_patterns <- c("facebook.com", "instagram.com", "x.com", "tiktok.com", "twitter.com")
   # str_detect works rowwise via map_lgl
   map_lgl(domains, ~ any(str_detect(.x, social_patterns)))
 }
 
 
 
-link_in_database <- function(link, max_dist = 5) {
-  ## test env
-  
-  #link = "www.aachexcvbcxvbnerzeitung.de/zeitungslink"
-  #max_dist = 3
-  
-  # --- Extract path from the link
-  path_to_seek <- link %>%
-    url_parse() %>%
-    .$path %>%
-    str_to_lower()
-  
-  domain_to_seek <- link %>%
-    url_parse() %>%
-    .$domain %>%
-    str_to_lower()
-  
-  # --- Prepare DB in long format (all social URLs in one column)
-  db_long <- db %>%
-    select(KomplettID, Name, contains("URL")) %>%
-    tidyr::pivot_longer(cols = contains("URL"),
-                        names_to = "platform",
-                        values_to = "url") %>%
-    filter(!is.na(url), url != "existiert nicht") %>%
-    mutate(domain = url_parse(url)$domain %>% str_to_lower()) %>%
-    mutate(domain_suffix = suffix_extract(domain)$domain,
-           path = url_parse(url)$path)
-  
-  
-  
-  if (is_social_domain(domain_to_seek)) {
-    message("we got a social domain!")
-    
-    if (is.na(path_to_seek))
-      return(FALSE)
-    
-    
-  } else {
-    message("we got a web domain!")
-    
-    suf_ex <- domain_to_seek %>% suffix_extract()
-    path_to_seek <- suf_ex$domain ## the name of our publication is now in the domain, not the path. Overriding this.
-    
-    
-  }
-  
-  # --- 1. Exact path match
-  exact_match <- db_long %>%
-    filter(path == path_to_seek)
-  
-  if (nrow(exact_match) > 0)
-    return(TRUE)
-  
-  
-  # --- 2. Fuzzy match between path and Name (for newspaper websites)
-  fuzzy <- stringdist_left_join(
-    tibble(path = path_to_seek),
-    db %>% select(KomplettID, Name) %>% mutate(Name = str_to_lower(Name)),
-    by = c("path" = "Name"),
-    max_dist = max_dist
-  )
-  
-  
-  match <- !all(is.na(fuzzy$KomplettID))
-  
-  return(match)
-  
-}
 
-
-link_in_database_vec <- function(links, max_dist = 5) {
+link_in_database_vec <- function(links, max_dist = 2) {
+  
+  
   
   parsed <- url_parse(links)
   domains <- str_to_lower(parsed$domain)
@@ -144,15 +93,19 @@ link_in_database_vec <- function(links, max_dist = 5) {
   # Social domain check (vectorized)
   is_social <- is_social_domain(domains)
   
-  # --- Vectorized loop with map_lgl (still preserves all logic)
-  map_lgl(seq_along(links), function(i) {
+  # Ergebnisliste vorbereiten
+  results <- map(seq_along(links), function(i) {
+    message("DEBUG: Searching for link: ", links[i])
     domain_to_seek <- domains[i]
     path_to_seek <- paths[i]
     
     if (is_social[i]) {
       # Social domain logic
-      if (is.na(path_to_seek)) return(FALSE)
+      message("Is social: yes! for path_to_seek=", path_to_seek)
+      if (is.na(path_to_seek)) return(NULL)
     } else {
+      message("Is social: no! for path_to_seek=", path_to_seek)
+      
       # Web domain logic: override path with domain
       suf_ex <- suffix_extract(domain_to_seek)
       path_to_seek <- suf_ex$domain
@@ -160,47 +113,68 @@ link_in_database_vec <- function(links, max_dist = 5) {
     
     # 1. Exact path match in DB
     exact_match <- db_long %>% filter(path == path_to_seek)
-    if (nrow(exact_match) > 0) return(TRUE)
-    
-    # 2. Fuzzy match for web domains (social domains skip fuzzy)
-    
-    if (is.na(path_to_seek)) return(FALSE)
-    if (!is_social[i]) {
-      fuzzy <- stringdist_left_join(
-        tibble(path = path_to_seek),
-        db_names,
-        by = c("path" = "Name"),
-        max_dist = max_dist
-      )
-      match <- !all(is.na(fuzzy$KomplettID))
-      return(match)
+    if (nrow(exact_match) > 0) {
+      message("Exact match with path_to_seek=", path_to_seek)
+      print(exact_match)
+      return(exact_match %>% 
+               select(KomplettID, Name, Kategorie, Typ) %>% 
+               slice(1) %>% 
+               mutate(match_type = "exact"))
     }
     
-    # If social domain and no exact match
-    return(FALSE)
+    # 2. Fuzzy match for web domains (social domains skip fuzzy)
+    if (is.na(path_to_seek)) return(NULL)
+    if (!is_social[i]) {
+      
+      message("Fuzzy matching path_to_seek=", path_to_seek, " with max dist=")
+      fuzzy <- stringdist_left_join(
+        tibble(path = path_to_seek),
+        db %>% select(KomplettID, Name, Name_clean, Kategorie, Typ) %>% mutate(Name = str_to_lower(Name)),
+        by = c("path" = "Name_clean"),
+        max_dist = max_dist
+      )
+      best <- fuzzy %>% filter(!is.na(KomplettID)) %>% slice(1)
+      message("We got the following fuzzy result:")
+      print(fuzzy)
+      if (nrow(best) > 0) {
+        return(best %>% select(KomplettID, Name, Kategorie, Typ) %>% mutate(match_type = "fuzzy"))
+      }
+    }
+    
+    # Kein Treffer
+    return(NULL)
   })
+  
+  return(results)
 }
 
 
-filter_links <- function(links, max_dist = 5, chunk_size = 100) {
+filter_links <- function(links, max_dist = 2, chunk_size = 100) {
   
   n <- nrow(links)
-  results <- logical(n)
+  matches <- vector("list", n)
   pb <- progress_bar$new(total = n, format = "[:bar] :percent (:current/:total)")
-  
+  message("DEBUG - filter_links function, max dist is =", max_dist)
   # Process in chunks
   for (start_idx in seq(1, n, by = chunk_size)) {
     idx <- start_idx:min(start_idx + chunk_size - 1, n)
-    results[idx] <- link_in_database_vec(links$link[idx], max_dist = max_dist)
+    res <- link_in_database_vec(links$link[idx], max_dist = max_dist)
+    matches[idx] <- res
     pb$tick(length(idx))
   }
   
-  all_links_filtered <- links[results, ]
+  # Nur Zeilen behalten, die Treffer haben
+  has_match <- map_lgl(matches, ~ !is.null(.x))
+  
+  all_links_filtered <- links[has_match, ] %>%
+    bind_cols(bind_rows(matches[has_match]))
   
   n_filtered <- nrow(all_links_filtered)
   message("We filtered ", n - n_filtered, " links. Remaining links: ", n_filtered)
+  
   return(all_links_filtered)
 }
+
 
 
 # 1. Load the previously saved RDS file
@@ -247,8 +221,8 @@ for (participant in data) {
 
 #### Filter to dbös!
 
-all_links <- filter_links(all_links)
-
+all_links <-  all_links  %>% filter_links(max_dist = 2, chunk_size = 100)
+### currently still inadequate! for instance, see Spiegel vs Spiegel TV etc
 
 
 ####
@@ -259,8 +233,11 @@ domain_summary <- all_links %>%
   summarise(
     total_links = n(),                           # total number of links
     participants_with_link = n_distinct(participant)  # number of distinct participants
+    
   ) %>%
   arrange(desc(total_links))
+
+
 
 # 5. Optional: Count per participant per domain
 domain_counts <- all_links %>%
