@@ -245,11 +245,11 @@ domain_counts <- all_links %>%
   summarise(count = n(), .groups = "drop") %>%
   arrange(participant, desc(count))
 
-# 6. Save results
-saveRDS(all_links, "whatsapp_links_combined.rds")
-saveRDS(domain_counts, "whatsapp_domain_counts.rds")
-write.csv(domain_counts, "whatsapp_domain_counts.csv", row.names = FALSE)
-write.csv(domain_summary, "whatsapp_domain_summary.csv", row.names = FALSE)
+# # 6. Save results
+# saveRDS(all_links, "whatsapp_links_combined.rds")
+# saveRDS(domain_counts, "whatsapp_domain_counts.rds")
+# write.csv(domain_counts, "whatsapp_domain_counts.csv", row.names = FALSE)
+# write.csv(domain_summary, "whatsapp_domain_summary.csv", row.names = FALSE)
 
 # 7. Optional: view top domains overall
 print(head(domain_summary, 20))
