@@ -14,6 +14,8 @@ pacman::p_load(
 )
 
 master_list <- list()  # top-level container
+master_df <- tibble()
+
 files <- list.files("01_Data", pattern = "\\.json$", full.names = TRUE)
 
 extract_params <- function(fname) {
@@ -155,8 +157,102 @@ for (f in files) {
   message("entry has the following platform attribute: ", attr(master_list[[pid]], "platform"))
 }
 
+
+
+
+#### Create nested dataframes from the json list export
+
+safe_field <- function(x, name) {
+  v <- x[[name]]
+  if (is.null(v)) NA_character_ else as.character(v)
+}
+
+messages_to_tbl <- function(msgs) {
+  if (is.null(msgs) || length(msgs) == 0) {
+    return(tibble(date = character(), link = character(), domain = character()))
+  }
+  map_dfr(msgs, ~ tibble(
+    date   = safe_field(.x, "date"),
+    link   = safe_field(.x, "link"),
+    domain = safe_field(.x, "domain")
+  ))
+}
+
+# Erzeuge das nested tibble (jede messages-Zelle ist jetzt ein tibble)
+whatsapp_tbl <- imap_dfr(master_list, function(pdata, pid) {
+  if (is.null(pdata$whatsapp)) return(NULL)
+  imap_dfr(pdata$whatsapp, function(chat, chatname) {
+    tibble(
+      participant = pid,
+      chat_name   = chatname,
+      messages    = list(messages_to_tbl(chat$whatsapp_links_with_context))
+    )
+  })
+})
+
+
+#### Create facebook tibble
+
+
+
+# Hilfsfunktion: generische Umwandlung einer Liste von Einträgen in ein Tibble
+to_tbl <- function(lst) {
+  if (is.null(lst) || length(lst) == 0) return(tibble())
+  
+  # sammle alle möglichen Felder (weil die mal unterschiedlich heißen können)
+  all_fields <- unique(unlist(map(lst, names)))
+  
+  map_dfr(lst, function(x) {
+    vals <- map(all_fields, ~ x[[.x]] %||% NA_character_)
+    tibble(!!!set_names(vals, all_fields))
+  })
+}
+
+# Hauptfunktion: extrahiere pro Teilnehmer seine Facebook-Daten
+facebook_tbl <- imap_dfr(master_list, function(pdata, pid) {
+  if (is.null(pdata$facebook)) return(NULL)
+  
+  fb <- pdata$facebook
+  
+  tibble(
+    participant = pid,
+    datatype = c("comments", "likes", "follows", "pages"),
+    data = list(
+      to_tbl(fb$facebook_comments),
+      to_tbl(fb$facebook_likes_and_reactions),
+      to_tbl(fb$facebook_follows),
+      to_tbl(fb$facebook_followed_pages)
+    )
+  )
+})
+fb_comments_tbl <- imap_dfr(master_list, function(pdata, pid) {
+  if (is.null(pdata$facebook$facebook_comments)) return(NULL)
+  to_tbl(pdata$facebook$facebook_comments) |> mutate(participant = pid)
+})
+
+fb_likes_tbl <- imap_dfr(master_list, function(pdata, pid) {
+  if (is.null(pdata$facebook$facebook_likes_and_reactions)) return(NULL)
+  to_tbl(pdata$facebook$facebook_likes_and_reactions) |> mutate(participant = pid)
+})
+
+fb_follows_tbl <- imap_dfr(master_list, function(pdata, pid) {
+  if (is.null(pdata$facebook$facebook_follows)) return(NULL)
+  to_tbl(pdata$facebook$facebook_follows) |> mutate(participant = pid)
+})
+
+fb_pages_tbl <- imap_dfr(master_list, function(pdata, pid) {
+  if (is.null(pdata$facebook$facebook_followed_pages)) return(NULL)
+  to_tbl(pdata$facebook$facebook_followed_pages) |> mutate(participant = pid)
+})
+
 # ---------------- Save ----------------
 saveRDS(master_list, file = "01_Data/parsed_data.rds")
+saveRDS(whatsapp_tbl, file = "01_Data/whatsapp_data_tibble.rds")
+
+saveRDS(fb_comments_tbl, file = "01_Data/facebook_comments_tibble.rds")
+saveRDS(fb_likes_tbl,    file = "01_Data/facebook_likes_tibble.rds")
+saveRDS(fb_follows_tbl,  file = "01_Data/facebook_follows_tibble.rds")
+saveRDS(fb_pages_tbl,    file = "01_Data/facebook_followed_pages_tibble.rds")
 
 # ---------------- Summary ----------------
 
@@ -170,3 +266,8 @@ message("Facebook exports loaded: ", facebook_count)
 message("WhatsApp exports loaded: ", whatsapp_count)
 message("Files with no usable data: ", missing_count)
 message("Files with parse errors: ", error_count)
+
+
+
+
+
