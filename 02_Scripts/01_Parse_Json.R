@@ -154,7 +154,7 @@ for (f in files) {
     
   }
   attr(master_list[[pid]], "participant") <- pid
-  message("entry has the following platform attribute: ", attr(master_list[[pid]], "platform"))
+  #message("entry has the following platform attribute: ", attr(master_list[[pid]], "platform"))
 }
 
 
