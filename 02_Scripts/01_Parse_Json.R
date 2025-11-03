@@ -1,7 +1,7 @@
 # ------------------------------------------------------------
 # Script: parse_all_json_robust.R
 # Task  : Robustly load all JSONs in 01_Data, extract params,
-#         flag malformed/empty files, save combined data as nested list rds file
+#         flag malformed/empty files, save combined data
 # ------------------------------------------------------------
 
 pacman::p_load(
@@ -14,7 +14,6 @@ pacman::p_load(
 )
 
 master_list <- list()  # top-level container
-master_df <- tibble()
 
 files <- list.files("01_Data", pattern = "\\.json$", full.names = TRUE)
 
