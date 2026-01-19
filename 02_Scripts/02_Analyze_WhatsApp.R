@@ -15,7 +15,8 @@ pacman::p_load(
   stringr,
   fuzzyjoin,
   urltools,
-  vegan
+  vegan,
+  stringi
 )
 
 # ------------------------------
@@ -28,7 +29,7 @@ db <- read_excel("05_Public_speaker_Database/data/DBOES_2024_12_komplett.xlsx") 
 normalize_name <- function(x) {
   x %>%
     str_to_lower() %>%
-    str_replace_all("[^a-z0-9 ]", " ") %>%
+    str_replace_all("[^a-z0-9üäö ]", " ") %>%
     str_squish()
 }
 
@@ -36,7 +37,7 @@ db <- db %>%
   mutate(Name_clean = normalize_name(Name))
 
 db_long <- db %>%
-  select(KomplettID, Name, Kategorie, Typ, contains("URL")) %>%
+  select(KomplettID, Name, Kategorie, Typ, contains("URL"), Name_clean) %>%
   pivot_longer(
     cols = contains("URL"),
     names_to = "platform",
@@ -112,14 +113,16 @@ normalize_handle <- function(x) {
 }
 
 all_links_clean <- all_links %>%
-  filter(!is.na(account)) %>%
+  filter(!is.na(account)) %>% 
+  filter(stri_length(account) > 2) %>% 
   mutate(
     account_norm = normalize_handle(account)
   )
 
 db_match_clean <- db_long %>%
-  select(KomplettID, Name, Kategorie, Typ, path) %>%
+  select(KomplettID, Name, Kategorie, Typ, path, Name_clean) %>%
   filter(!is.na(path)) %>%
+  filter(stri_length(path) > 2) %>% 
   mutate(
     path_norm = normalize_handle(path)
   )
@@ -128,9 +131,36 @@ db_match_clean <- db_long %>%
 exact_matches <- inner_join(
   all_links_clean,
   db_match_clean,
-  by = c("account_norm" = "path_norm")
+  by = c("account_norm" = "path_norm"),
+  relationship = "many-to-many"
 ) %>%
+  group_by(link) %>%
+  slice(1) %>%        # or slice_min(KomplettID)
+  ungroup() %>%
   mutate(dist = 0, rel_dist = 0, match_type = "exact")
+
+
+unmatched_links <- anti_join(
+  all_links_clean,
+  exact_matches,
+  by = "link"
+)
+
+exact_matches_2 <- inner_join(
+  unmatched_links,
+  db_match_clean,
+  by = c("account_norm" = "Name_clean"),
+  relationship = "many-to-many"
+) %>%
+  group_by(link) %>%
+  slice(1) %>%        # or slice_min(KomplettID)
+  ungroup() %>%
+  mutate(dist = 0, rel_dist = 0, match_type = "exact")
+
+
+
+
+
 
 # ---- Stage 2: fuzzy ----
 unmatched_links <- anti_join(
@@ -155,7 +185,7 @@ fuzzy_matches <- stringdist_left_join(
   ungroup()
 
 # ---- Combine & ORDER by DBÖS ID (TODO #2) ----
-fuzzy_links <- bind_rows(exact_matches, fuzzy_matches) %>%
+fuzzy_links <- bind_rows(exact_matches, exact_matches_2, fuzzy_matches) %>%
   select(
     participant, chat_name, date, link, domain, social_platform,
     account, account_norm,

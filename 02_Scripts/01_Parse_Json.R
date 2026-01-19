@@ -4,6 +4,10 @@
 #         flag malformed/empty files, save combined data
 # ------------------------------------------------------------
 
+#### Clean Environment ####
+rm(list = ls())
+gc()
+
 pacman::p_load(
   "jsonlite",
   "dplyr",
