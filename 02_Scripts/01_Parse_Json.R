@@ -7,6 +7,7 @@
 #### Clean Environment ####
 rm(list = ls())
 gc()
+if (!require("pacman", character.only = TRUE)) install.packages("pacman")
 
 pacman::p_load(
   "jsonlite",
