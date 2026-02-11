@@ -3,7 +3,7 @@
 # Task  : Robustly load all JSONs in 01_Data, extract params,
 #         flag malformed/empty files, save combined data
 # ------------------------------------------------------------
-
+##TODO: Check for duplicates for the same user ID, which might happen if users upload the same ddp twice
 #### Clean Environment ####
 rm(list = ls())
 gc()
